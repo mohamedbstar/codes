@@ -78,11 +78,7 @@ public:
         return it;
     }
     Iterator end(){
-        Iterator it(head);
-        while (*it != nullptr)
-        {
-            ++it;
-        }
+        Iterator it(nullptr);
         return it;
     }
     void insert(T d){
