@@ -133,6 +133,49 @@ PQ_Heap<N,C>::~PQ_Heap()
     }*/
 }
 
+template <typename N>
+void heapify(int idx, N* arr, int size){
+    int largestChild = idx;
+    int leftChild = idx*2 + 1;
+    int rightChild = idx*2 + 2;
+
+    if(leftChild < size && arr[leftChild] > arr[largestChild]){
+        largestChild = leftChild;
+    }
+    if (rightChild < size && arr[rightChild] > arr[largestChild])
+    {
+        largestChild = rightChild;
+    }
+    if (largestChild != idx)
+    {
+        swap(arr[largestChild], arr[idx]);
+        heapify(largestChild, arr, size);
+    }
+    
+    
+}
+
+template <typename N>
+void heapSort(N *arr, int size){
+    cout<<"Initial Array ";
+    for(int i = 0; i < size; i++){
+        cout<<arr[i]<<" ";
+    }
+    cout<<endl;
+    for(int i = (size/2); i >= 0 ;i--){
+        heapify(i, arr, size);
+    }
+    for (int i = size - 1; i  > 0; i--)
+    {
+        swap(arr[0], arr[i]);
+        heapify<N>(0, arr, i);//meaning that doen't consider i to be inclusive in the array positions
+    }
+    cout<<"Sorted Array ";
+    for(int i = 0; i < size; i++){
+        cout<<arr[i]<<" ";
+    }
+    cout<<endl;
+}
 
 int main(int argc, char const *argv[])
 {
