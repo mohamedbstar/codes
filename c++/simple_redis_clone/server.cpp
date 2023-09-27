@@ -12,6 +12,8 @@
 #include "conn.h"
 #include <vector>
 #include <sstream>
+#include <thread>
+#include <unordered_map>
 
 /*============================================================
 ****when netcat is interrupted and closed, ****num_read = 0***
@@ -25,6 +27,8 @@ void handle_one_request(int conn_fd);
 void handle_connections(int fd);
 void fd_set_nb(int fd);
 void accept_new_connection(int fd, vector<Connection*>& connections);
+
+unordered_map<string, string> hash_table;
 
 Connection::Connection(){
     fd = -1;
@@ -104,9 +108,11 @@ void Connection::handle_state_req(){
     status = res < 0 ? STATUS_REQ : STATUS_RES;
     if(res == 0){
         //now successfully read the whole message
-        memcpy(write_buf, read_buf, read_buf_size);
-        write_buf_size = read_buf_size + 11;
-
+        if(ret_value != ""){
+            write_buf_size = ret_value.length();
+            write_msg(ret_value);
+            ret_value = "";
+        }
     }else if(res == -2){
         cout<<"res = -2"<<endl;
         status = STATUS_END;
@@ -129,13 +135,12 @@ int Connection::parse_protocol(){
     //the protocol message is inside read_buf
     string s(read_buf);
     stringstream parser(s);
-    stringstream builder;
-    char builder_buffer[msg_buf_max];
     int res;
     string word;
-
     string nstrs;
     parser >> nstrs;//word now contains nstr
+    vector<string> do_args;
+    
     if (check_all_numerics(nstrs))
     {
         cout<<"nstrs not all digits"<<endl;
@@ -149,11 +154,55 @@ int Connection::parse_protocol(){
         }else{
             //str word
             //builder << word <<" ";
-
+            do_args.push_back(word);
         }
     }
-    builder.read(builder_buffer, msg_buf_max);
-    cout<<"User Sent "<<builder_buffer<<endl;
+    res = do_handle(do_args);
+    return 0;
+}
+int Connection::do_handle(vector<string>& args){
+    //use unordered_map as a backing storage
+    int res;
+    if(args[0] == "set"){
+        res = do_set(args);
+    }else if (args[0] == "del")
+    {
+        res = do_del(args);
+    }else if (args[0] == "get")
+    {
+        res = do_get(args);
+    }else{
+        return -1;
+    }
+    return res;
+}
+int Connection::do_set(vector<string>& args){
+    string key = args[1];
+    string value_builder{};
+    args.erase(args.begin());//erase set 
+    args.erase(args.begin());//erase key
+
+    for(auto s : args){
+        value_builder += s;
+    }
+    hash_table[key] = string(value_builder);
+    return 0;
+}
+int Connection::do_del(vector<string>& args){
+    if (hash_table.find(args[1]) == hash_table.end())
+    {
+        return -1;//not existing key
+    }
+    hash_table.erase(hash_table.find(args[1]));
+    return 0;
+}
+int Connection::do_get(vector<string>& args){
+    if (hash_table.find(args[1]) == hash_table.end())
+    {
+        return -1;//not existing key
+    }
+    string key = args[1];
+    ret_value = hash_table.at(key);
     return 0;
 }
 int Connection::analyze_request(){
@@ -192,7 +241,7 @@ int Connection::analyze_request(){
 }
 
 void Connection::handle_state_res(){
-    write_msg("[Received]" + string(write_buf)+string("\n"));
+    //write_msg("[Received]" + string(write_buf)+string("\n"));
     status = STATUS_REQ;
     write_buf_size = 0;
     memset(write_buf, 0, msg_buf_max);
