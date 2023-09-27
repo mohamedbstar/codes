@@ -11,9 +11,21 @@
 #include <sys/poll.h>
 #include "conn.h"
 #include <vector>
+#include <sstream>
+
+/*============================================================
+****when netcat is interrupted and closed, ****num_read = 0***
+=============================================================*/
 
 //#include "conn.h"
 using namespace std;
+#define BUF_MAX 4096
+int init_server();
+void handle_one_request(int conn_fd);
+void handle_connections(int fd);
+void fd_set_nb(int fd);
+void accept_new_connection(int fd, vector<Connection*>& connections);
+
 Connection::Connection(){
     fd = -1;
     status = STATUS_REQ;
@@ -42,43 +54,21 @@ void Connection::set_non_blocking(){
 }
 
 int Connection::read_msg(){
-    //cout<<"in read_msg()"<<endl;
     //fill the read_buf
     int num_read = 0;
     int read_so_far = 0;
     while ((read_buf_size-read_so_far) > 0 && (num_read = read(this->fd, (char*)(this->read_buf+read_so_far), msg_buf_max-read_so_far)) > 0)
     {
         read_so_far += num_read;
-        //read_buf_size -= num_read;
-        //cout<<"num_read "<<num_read<<endl;
-        //cout<<"read_so_far: "<<read_so_far<<endl;
     }
-
-    /*while (num_read = read(fd, (char*) (read_buf + read_so_far), msg_buf_max))
-    {
-        if (num_read < 0)
-        {
-            if(errno == EINTR || errno == EAGAIN){
-                continue;
-            }else{
-                break;
-            }
-        }
-        if (num_read == 0)
-        {
-            //EOF
-            break;
-        }
-        read_so_far += num_read;
-    }*/
-    //num_read = read(fd, read_buf, msg_buf_max);
-    
+    if(read_so_far == 0){
+        return -2;//to indicate that client closed connection so that making its ststus STATUS_END
+    }
     if(num_read < 0){
         perror("read_msg");
         return -1;
     }
     read_buf[read_so_far-1] = '\0';
-    //read_buf_size = read_so_far;
     return 0;
 }
 void Connection::write_msg(string msg){
@@ -100,10 +90,8 @@ void Connection::write_msg(string msg){
 
 void Connection::io(int lfd,const vector<Connection*>& connections){
     if(status == STATUS_REQ){
-        //cout<<"Entering handle_state_req()"<<endl;
         handle_state_req();
     }else if(status == STATUS_RES){
-        //cout<<"Entering handle_state_res()"<<endl;
         handle_state_res();
     }else{
         //cout<<"in assert(0)"<<endl;
@@ -111,19 +99,6 @@ void Connection::io(int lfd,const vector<Connection*>& connections){
     }
 }
 void Connection::handle_state_req(){
-    //cout<<"In handle_state_req()"<<endl;
-    /*int res = read_msg();
-    if(res){
-        return;
-    }
-
-    //analyze the msg
-    cout<<"before analyze_request"<<endl;
-    analyze_request();
-    cout<<"before analyze_request"<<endl;*/
-    /* TODO: do something to tell the client that you got the msg */
-    //write_msg("Got Your message as " + string(read_buf));
-
     int res = analyze_request();//now i have read the whole message from connection
     //then change connection state
     status = res < 0 ? STATUS_REQ : STATUS_RES;
@@ -132,26 +107,56 @@ void Connection::handle_state_req(){
         memcpy(write_buf, read_buf, read_buf_size);
         write_buf_size = read_buf_size + 11;
 
+    }else if(res == -2){
+        cout<<"res = -2"<<endl;
+        status = STATUS_END;
     }
     //then reset every thing related to reading from connection
     read_buf_size = 0;
     memset(read_buf, 0, msg_buf_max);
     
 }
+int Connection::check_all_numerics(string word){
+    for(auto i : word){
+        if (!isdigit((int)i))
+        {
+            return -1;
+        }
+    }
+    return 0;
+}
+int Connection::parse_protocol(){
+    //the protocol message is inside read_buf
+    string s(read_buf);
+    stringstream parser(s);
+    stringstream builder;
+    char builder_buffer[msg_buf_max];
+    int res;
+    string word;
+
+    string nstrs;
+    parser >> nstrs;//word now contains nstr
+    if (check_all_numerics(nstrs))
+    {
+        cout<<"nstrs not all digits"<<endl;
+        return -1;
+    }
+    for(int i = 0; i < stoi(nstrs); i++){
+        parser >> word;
+        if(i % 2 == 0){
+            //len word
+            continue;
+        }else{
+            //str word
+            //builder << word <<" ";
+
+        }
+    }
+    builder.read(builder_buffer, msg_buf_max);
+    cout<<"User Sent "<<builder_buffer<<endl;
+    return 0;
+}
 int Connection::analyze_request(){
-    /*cout<<"in analyze request()"<<endl;
-    //the message is in read_buf
-    int msg_len;//first 4 bytes in the read_buf
-    memcpy(&msg_len, read_buf, 4);
-    msg_len = atoi((char*) &msg_len);
-    read_buf_size = msg_len;
-    //now msg_len is the length of the message
-
-    //get the command and keys and values
-    //determine what to do forthe user and send him a message
-    status = STATUS_RES;
-    memset(read_buf, 0, msg_buf_max);*/
-
     int num_read = 0;
     int read_so_far = 0;
     int msg_len; //to hold the length of the message sent by the user
@@ -164,8 +169,6 @@ int Connection::analyze_request(){
     memcpy(&msg_len, read_buf, 4);
     msg_len = atoi((char*) &msg_len);
     read_buf_size = msg_len;
-    //cout<<"read_buf_size = "<<read_buf_size<<endl;
-
     //then read the whole message sent by the user
     res = read_msg();
     if (res < 0)
@@ -173,31 +176,33 @@ int Connection::analyze_request(){
         perror("read_msg");
         return res;
     }
+    
+    /*
+    the read_buf now contains a string of the form below
+    +------+-----+------+-----+------+-----+-----+------+
+    | nstr | len | str1 | len | str2 | ... | len | strn |
+    +------+-----+------+-----+------+-----+-----+------+
+    */
+    res = parse_protocol();
+    if(res < 0){
+        cout<<"Error parsing protocol"<<endl;
+        return res;
+    }
     return 0;
 }
 
 void Connection::handle_state_res(){
-    //cout<<"in handle_state_res()"<<endl;
-    //handle res
-    //here we will reply to the sender with some reply
-    //write(fd, ("[Received]" + string(read_buf)).c_str(),("[Received]" + string(read_buf)).size());
     write_msg("[Received]" + string(write_buf)+string("\n"));
     status = STATUS_REQ;
     write_buf_size = 0;
     memset(write_buf, 0, msg_buf_max);
+    status = STATUS_END;
 }
 Connection::~Connection(){
     delete read_buf;
     delete write_buf;
 }
 
-
-#define BUF_MAX 4096
-int init_server();
-void handle_one_request(int conn_fd);
-void handle_connections(int fd);
-void fd_set_nb(int fd);
-void accept_new_connection(int fd, vector<Connection*>& connections);
 
 int main(int argc, char const *argv[])
 {
@@ -221,7 +226,7 @@ int main(int argc, char const *argv[])
             if(C != nullptr){
                 nfd.fd = C->fd;
                 nfd.events = C->status == STATUS_REQ? POLLIN : POLLOUT;
-                nfd.events |= POLLERR;
+                nfd.events |= (POLLHUP | POLLERR);
                 poll_fds.push_back(nfd);
                 nfd = {0,0,0};//reset the nfd                
             }
@@ -238,9 +243,16 @@ int main(int argc, char const *argv[])
         //cout<<"poll_fds.size "<<poll_fds.size()<<endl;
         for(int i = 1; i < poll_fds.size(); i++){
             if(poll_fds[i].revents > 0){
-                //cout<<"New Connectin polled"<<endl;
+                int r_events = poll_fds[i].revents;
+                if((r_events & POLLERR) | (r_events & POLLHUP)){
+                    //the connection is closed and needs to be removed
+                    connections.erase(connections.begin() + poll_fds[i].fd);
+                    close(poll_fds[i].fd);
+                    continue; 
+                }
                 //there is an event from that fd
                 Connection* conn = connections[poll_fds[i].fd];//get the corresponding connection
+                cout<<"POLLIN from "<<poll_fds[i].fd<<endl;
                 //cout<<"before calling conn->io"<<endl;
                 conn->io(fd, connections);//see what to do with this connection
                 //cout<<"after conn->io"<<endl;
@@ -264,11 +276,9 @@ int main(int argc, char const *argv[])
 }
 
 void accept_new_connection(int fd, vector<Connection*>& connections){
-    //cout<<"adding new connection ";
     int new_fd;
     struct sockaddr client_addr{};
     socklen_t length;
-    //cout<<"fd: "<<fd<<endl;
     new_fd = accept(fd, nullptr, nullptr);
     if(new_fd < 0){
         perror("accept");
@@ -359,14 +369,4 @@ void handle_one_request(int conn_fd){
 
     cout<<"[Client] "<<buffer<<endl;
     memset(buffer, 0, BUF_MAX);
-}
-void handle_connections(int fd){
-    struct sockaddr_in client_addr{};
-    socklen_t sock_len;
-    int conn_fd;
-
-    while (true)
-    {
-    }
-    
 }
