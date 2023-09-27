@@ -42,7 +42,7 @@ void Connection::set_non_blocking(){
 }
 
 int Connection::read_msg(){
-    cout<<"in read_msg()"<<endl;
+    //cout<<"in read_msg()"<<endl;
     //fill the read_buf
     int num_read = 0;
     int read_so_far = 0;
@@ -50,8 +50,8 @@ int Connection::read_msg(){
     {
         read_so_far += num_read;
         //read_buf_size -= num_read;
-        cout<<"num_read "<<num_read<<endl;
-        cout<<"read_so_far: "<<read_so_far<<endl;
+        //cout<<"num_read "<<num_read<<endl;
+        //cout<<"read_so_far: "<<read_so_far<<endl;
     }
 
     /*while (num_read = read(fd, (char*) (read_buf + read_so_far), msg_buf_max))
@@ -100,18 +100,18 @@ void Connection::write_msg(string msg){
 
 void Connection::io(int lfd,const vector<Connection*>& connections){
     if(status == STATUS_REQ){
-        cout<<"Entering handle_state_req()"<<endl;
+        //cout<<"Entering handle_state_req()"<<endl;
         handle_state_req();
     }else if(status == STATUS_RES){
-        cout<<"Entering handle_state_res()"<<endl;
+        //cout<<"Entering handle_state_res()"<<endl;
         handle_state_res();
     }else{
-        cout<<"in assert(0)"<<endl;
+        //cout<<"in assert(0)"<<endl;
         assert(0);//not anticipated situation
     }
 }
 void Connection::handle_state_req(){
-    cout<<"In handle_state_req()"<<endl;
+    //cout<<"In handle_state_req()"<<endl;
     /*int res = read_msg();
     if(res){
         return;
@@ -164,7 +164,7 @@ int Connection::analyze_request(){
     memcpy(&msg_len, read_buf, 4);
     msg_len = atoi((char*) &msg_len);
     read_buf_size = msg_len;
-    cout<<"read_buf_size = "<<read_buf_size<<endl;
+    //cout<<"read_buf_size = "<<read_buf_size<<endl;
 
     //then read the whole message sent by the user
     res = read_msg();
@@ -177,7 +177,7 @@ int Connection::analyze_request(){
 }
 
 void Connection::handle_state_res(){
-    cout<<"in handle_state_res()"<<endl;
+    //cout<<"in handle_state_res()"<<endl;
     //handle res
     //here we will reply to the sender with some reply
     //write(fd, ("[Received]" + string(read_buf)).c_str(),("[Received]" + string(read_buf)).size());
@@ -206,7 +206,7 @@ int main(int argc, char const *argv[])
         cout<<"Error making a server socket"<<endl;
         return 0;
     }
-    cout<<"listening on "<<fd<<endl;
+    //cout<<"listening on "<<fd<<endl;
     vector<Connection*> connections(0, nullptr);//indexed by its fd
     vector<struct pollfd> poll_fds;//holds the fds to be watched bu poll
     struct pollfd pfd{fd, POLLIN, 0}, nfd{0};
@@ -238,12 +238,12 @@ int main(int argc, char const *argv[])
         //cout<<"poll_fds.size "<<poll_fds.size()<<endl;
         for(int i = 1; i < poll_fds.size(); i++){
             if(poll_fds[i].revents > 0){
-                cout<<"New Connectin polled"<<endl;
+                //cout<<"New Connectin polled"<<endl;
                 //there is an event from that fd
                 Connection* conn = connections[poll_fds[i].fd];//get the corresponding connection
-                cout<<"before calling conn->io"<<endl;
+                //cout<<"before calling conn->io"<<endl;
                 conn->io(fd, connections);//see what to do with this connection
-                cout<<"after conn->io"<<endl;
+                //cout<<"after conn->io"<<endl;
                 if(conn->status == STATUS_END){
                     //close the connection
                     connections[conn->fd] = nullptr;
@@ -253,7 +253,7 @@ int main(int argc, char const *argv[])
             }
         }
         if(poll_fds[0].revents){
-            cout<<"before entering accept_new"<<endl;
+            //cout<<"before entering accept_new"<<endl;
             accept_new_connection(fd, connections);
         }
         poll_fds.resize(0);
@@ -264,11 +264,11 @@ int main(int argc, char const *argv[])
 }
 
 void accept_new_connection(int fd, vector<Connection*>& connections){
-    cout<<"adding new connection ";
+    //cout<<"adding new connection ";
     int new_fd;
     struct sockaddr client_addr{};
     socklen_t length;
-    cout<<"fd: "<<fd<<endl;
+    //cout<<"fd: "<<fd<<endl;
     new_fd = accept(fd, nullptr, nullptr);
     if(new_fd < 0){
         perror("accept");
