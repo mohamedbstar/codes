@@ -46,32 +46,47 @@ int Connection::read_msg(){
     //fill the read_buf
     int num_read = 0;
     int read_so_far = 0;
-    while ((num_read = read(this->fd, (char*)(this->read_buf+read_so_far), msg_buf_max-read_so_far)) > 0 && read_buf_size > 0)
+    while ((read_buf_size-read_so_far) > 0 && (num_read = read(this->fd, (char*)(this->read_buf+read_so_far), msg_buf_max-read_so_far)) > 0)
     {
         read_so_far += num_read;
-        read_buf_size -= num_read;
+        //read_buf_size -= num_read;
         cout<<"num_read "<<num_read<<endl;
         cout<<"read_so_far: "<<read_so_far<<endl;
     }
-    if (num_read == 0)
+
+    /*while (num_read = read(fd, (char*) (read_buf + read_so_far), msg_buf_max))
     {
-        /* do nothing as its EOF */
-        cout<<"num_read = 0"<<endl;
-        read_buf[read_so_far-1] = '\0';
-        read_buf_size = read_so_far;
-        return 0;
-    }
+        if (num_read < 0)
+        {
+            if(errno == EINTR || errno == EAGAIN){
+                continue;
+            }else{
+                break;
+            }
+        }
+        if (num_read == 0)
+        {
+            //EOF
+            break;
+        }
+        read_so_far += num_read;
+    }*/
+    //num_read = read(fd, read_buf, msg_buf_max);
+    
     if(num_read < 0){
         perror("read_msg");
         return -1;
     }
+    read_buf[read_so_far-1] = '\0';
+    //read_buf_size = read_so_far;
+    return 0;
 }
 void Connection::write_msg(string msg){
     int num_written = 0;
-    int msg_len = msg.length();
+    int msg_len = write_buf_size;
     int written_so_far = 0;
     strcpy(write_buf, msg.c_str());
-    while ( (num_written = write( fd, write_buf, msg_len - written_so_far )) > 0 && msg_len > 0)
+    while (  msg_len > 0 && (num_written = write( fd, write_buf, msg_len - written_so_far )) > 0 )
     {
         written_so_far += num_written;
         msg_len -= num_written;
@@ -88,7 +103,7 @@ void Connection::io(int lfd,const vector<Connection*>& connections){
         cout<<"Entering handle_state_req()"<<endl;
         handle_state_req();
     }else if(status == STATUS_RES){
-        cout<<"Entering handle_state_req()"<<endl;
+        cout<<"Entering handle_state_res()"<<endl;
         handle_state_res();
     }else{
         cout<<"in assert(0)"<<endl;
@@ -97,18 +112,34 @@ void Connection::io(int lfd,const vector<Connection*>& connections){
 }
 void Connection::handle_state_req(){
     cout<<"In handle_state_req()"<<endl;
-    int res = read_msg();
-    if(res)
+    /*int res = read_msg();
+    if(res){
         return;
+    }
+
     //analyze the msg
     cout<<"before analyze_request"<<endl;
     analyze_request();
-    cout<<"before analyze_request"<<endl;
+    cout<<"before analyze_request"<<endl;*/
     /* TODO: do something to tell the client that you got the msg */
-    write_msg("Got Your message as " + string(read_buf));
+    //write_msg("Got Your message as " + string(read_buf));
+
+    int res = analyze_request();//now i have read the whole message from connection
+    //then change connection state
+    status = res < 0 ? STATUS_REQ : STATUS_RES;
+    if(res == 0){
+        //now successfully read the whole message
+        memcpy(write_buf, read_buf, read_buf_size);
+        write_buf_size = read_buf_size + 11;
+
+    }
+    //then reset every thing related to reading from connection
+    read_buf_size = 0;
+    memset(read_buf, 0, msg_buf_max);
+    
 }
-void Connection::analyze_request(){
-    cout<<"in analyze request()"<<endl;
+int Connection::analyze_request(){
+    /*cout<<"in analyze request()"<<endl;
     //the message is in read_buf
     int msg_len;//first 4 bytes in the read_buf
     memcpy(&msg_len, read_buf, 4);
@@ -119,6 +150,30 @@ void Connection::analyze_request(){
     //get the command and keys and values
     //determine what to do forthe user and send him a message
     status = STATUS_RES;
+    memset(read_buf, 0, msg_buf_max);*/
+
+    int num_read = 0;
+    int read_so_far = 0;
+    int msg_len; //to hold the length of the message sent by the user
+    int res;
+
+    while((num_read = read(fd, read_buf, (4-read_so_far))) > 0 && (4-read_so_far) > 0){
+        read_so_far += num_read;
+    }
+    
+    memcpy(&msg_len, read_buf, 4);
+    msg_len = atoi((char*) &msg_len);
+    read_buf_size = msg_len;
+    cout<<"read_buf_size = "<<read_buf_size<<endl;
+
+    //then read the whole message sent by the user
+    res = read_msg();
+    if (res < 0)
+    {
+        perror("read_msg");
+        return res;
+    }
+    return 0;
 }
 
 void Connection::handle_state_res(){
@@ -126,7 +181,10 @@ void Connection::handle_state_res(){
     //handle res
     //here we will reply to the sender with some reply
     //write(fd, ("[Received]" + string(read_buf)).c_str(),("[Received]" + string(read_buf)).size());
-    write_msg("[Received]" + string(read_buf));
+    write_msg("[Received]" + string(write_buf)+string("\n"));
+    status = STATUS_REQ;
+    write_buf_size = 0;
+    memset(write_buf, 0, msg_buf_max);
 }
 Connection::~Connection(){
     delete read_buf;
@@ -165,10 +223,10 @@ int main(int argc, char const *argv[])
                 nfd.events = C->status == STATUS_REQ? POLLIN : POLLOUT;
                 nfd.events |= POLLERR;
                 poll_fds.push_back(nfd);
-                nfd = {0};//reset the nfd                
+                nfd = {0,0,0};//reset the nfd                
             }
         }
-        cout<<"num connetions "<<connections.size()<<endl;
+        //cout<<"num connetions "<<connections.size()<<endl;
         //then start polling
         res = poll(poll_fds.data(), poll_fds.size(), 1000);
         if(res < 0){
@@ -177,7 +235,7 @@ int main(int argc, char const *argv[])
         }
         
         //iterate over all events and serve each one
-        cout<<"poll_fds.size "<<poll_fds.size()<<endl;
+        //cout<<"poll_fds.size "<<poll_fds.size()<<endl;
         for(int i = 1; i < poll_fds.size(); i++){
             if(poll_fds[i].revents > 0){
                 cout<<"New Connectin polled"<<endl;
