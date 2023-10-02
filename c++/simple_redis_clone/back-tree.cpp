@@ -41,6 +41,7 @@ public:
     int fd;
     void* mapping_pos;
     struct stat fd_stat;
+    int root_pos_len;
     file_node* root;
     long mapping_size;
     long initial_file_size;
@@ -67,7 +68,7 @@ public:
         load_root();
     }
     void create_file(){
-        int f_fd = open(file_name, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+        int f_fd = open(file_name, O_RDWR);
         if (f_fd < 0)
         {
             perror("open at create file");
@@ -78,6 +79,9 @@ public:
         {
             write(f_fd, "0", 1);
         }
+        char c = '\0';
+        lseek(fd, 4096, SEEK_END);
+        write(fd, &c, 1);
     }
     void load_root(){
         //first 10 bytes hold the position of root node inside the file /*FIRST 10 BYTES IN THE MAPPING*/
@@ -184,7 +188,7 @@ public:
         mapping_pos = new_pos;
         mapping_size += sizeof(dummy_node);
         return old_pos;*/
-        return 10;
+        return 11;
     }
     void insert_util(char key[], char value[], file_node* cur){
     }
@@ -239,10 +243,12 @@ public:
             }
             left += '\0';
             right += '\0';
+            signed char root_pos_l = 1;
             write_node(new_pos, k_len, v_len, 0,0,0,k, v, left, right, pos);
             //update the root position
-            memcpy(mapping_pos, pos.c_str(), 10);
-            
+            memcpy(mapping_pos+1, pos.c_str(), 10);
+            memcpy(mapping_pos, &root_pos_l, 1);
+
             cout<<"after write_node"<<endl;
             root = (file_node*)(mapping_pos + new_pos);
             cout<<"root is "<<root->key<<" : "<<root->value<<endl;
@@ -279,6 +285,5 @@ int main(int argc, char const *argv[])
         cout<<"root is nullptr"<<endl;
     }
     fo.insert("key1", "value1");
-    
     return 0;
 }
