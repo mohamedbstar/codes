@@ -23,10 +23,15 @@ using namespace std;
 
 class file_node{
 public:
+    signed char key_len;//hold actual number of bytes written as key out of MAX_KEY bytes
     char key[KEY_LEN];
+    signed char val_len;//hold actual number of bytes written as value out of MAX_VAL bytes
     char value[VAL_len];
+    signed char left_len;
     char left[POS_LEN];
+    signed char right_len;
     char right[POS_LEN];
+    signed char pos_len;
     char pos[POS_LEN];
 };
 
@@ -106,21 +111,21 @@ public:
             print_nodes(right_node);
         }
     }
-    bool find(const char key[], file_node* cur){
+    bool find(const char key[], file_node* cur, int len){
         if (cur == nullptr)
         {
             return false;
         }
-        if(strcmp(key, cur->key) < 0){
+        if(strncmp(key, cur->key, len) < 0){
             //key is less than cur->key
             file_node* left_node = stoi(cur->left) != 0? (file_node*)(mapping_pos + stoi(cur->left)) : nullptr;
-            return find(key, left_node);
-        }else if (strcmp(key, cur->key) > 0)
+            return find(key, left_node, len);
+        }else if (strncmp(key, cur->key, len) > 0)
         {
             /* key > cur->key */
             file_node* right_node = stoi(cur->right) != 0? (file_node*)(mapping_pos + stoi(cur->right)) : nullptr;
-            return find(key, right_node);
-        }else if (strcmp(key, cur->key) == 0)
+            return find(key, right_node, len);
+        }else if (strncmp(key, cur->key, len) == 0)
         {
             return true;
         }
@@ -137,19 +142,37 @@ public:
                 k += "0";
             }
         }
-        return find(k.c_str(), cur);
+        return find(k.c_str(), cur, len);
     }
-    void write_node(long offset, string key, string value, string left, string right, string pos){
-        void* write_offset_key = (void*)(mapping_pos + offset);
-        void* write_offset_val = (void*)(write_offset_key + KEY_LEN);
-        void* write_offset_left = (void*)(write_offset_val + VAL_len);
-        void* write_offset_right = (void*)(write_offset_left + POS_LEN);
-        void* write_offset_pos = (void*)(write_offset_right + POS_LEN);
+    void write_node(long offset, signed char key_len, signed char val_len, signed char left_len, signed char right_len, signed char pos_len, string key, string value, string left, string right, string pos){
+        void* write_offset_key_len = (void*)(mapping_pos + offset);//here key_len
+        void* write_offset_key = (void*)(write_offset_key_len + 1);
         
+        void* write_offset_val_len = (void*)(write_offset_key + KEY_LEN);  //here val_len
+        void* write_offset_val = (void*)(write_offset_val_len + 1);
+        
+        void* write_offset_left_len = (write_offset_val + VAL_len);//here left len
+        void* write_offset_left = (void*)(write_offset_left_len + 1);
+
+        void* write_offset_right_len = (write_offset_left + POS_LEN);
+        void* write_offset_right = (void*)(write_offset_right_len + 1);
+        
+        void* write_offset_pos_len = (void*) (write_offset_right + POS_LEN);
+        void* write_offset_pos = (void*)(write_offset_pos_len + 1);
+        
+        memcpy(write_offset_key_len, &key_len, 1);
         memcpy(write_offset_key, key.c_str(), KEY_LEN);
+        
+        memcpy(write_offset_val_len, &val_len, 1);
         memcpy(write_offset_val , value.c_str(), VAL_len);
+        
+        memcpy(write_offset_left_len, &left_len, 1);
         memcpy(write_offset_left , left.c_str(), POS_LEN);
+        
+        memcpy(write_offset_right_len, &right_len, 1);
         memcpy(write_offset_right , right.c_str(), POS_LEN);
+        
+        memcpy(write_offset_pos_len, &pos_len, 1);
         memcpy(write_offset_pos , pos.c_str(), POS_LEN);
     }
     long get_next_empty_pos_for_root(){
@@ -216,9 +239,10 @@ public:
             }
             left += '\0';
             right += '\0';
-            write_node(new_pos, k, v, left, right, pos);
+            write_node(new_pos, k_len, v_len, 0,0,0,k, v, left, right, pos);
             //update the root position
             memcpy(mapping_pos, pos.c_str(), 10);
+            
             cout<<"after write_node"<<endl;
             root = (file_node*)(mapping_pos + new_pos);
             cout<<"root is "<<root->key<<" : "<<root->value<<endl;
