@@ -1,12 +1,6 @@
 #include <iostream>
-#include <cstdio>
-#include <unistd.h>
-#include <fcntl.h>
-#include <sys/mman.h>
-#include <sys/stat.h>
-#include <cstring>
-#include <cstdlib>
-
+#include <fstream>
+#include <string.h>
 using namespace std;
 
 #define file_name   "redis"
@@ -24,132 +18,251 @@ using namespace std;
 class file_node{
 public:
     signed char key_len;//hold actual number of bytes written as key out of MAX_KEY bytes
-    char key[KEY_LEN];
+    char key[MAX_KEY];
     signed char val_len;//hold actual number of bytes written as value out of MAX_VAL bytes
-    char value[VAL_len];
+    char value[MAX_VAL];
     signed char left_len;
-    char left[POS_LEN];
+    char left[MAX_POS];
     signed char right_len;
-    char right[POS_LEN];
+    char right[MAX_POS];
     signed char pos_len;
-    char pos[POS_LEN];
+    char pos[MAX_POS];
+    
+};
+
+class mem_node{
+public:
+    string key;
+    string value;
+    mem_node* left;
+    mem_node* right;
+    char file_pos[MAX_POS];
+
+    mem_node(file_node* f_node): key(f_node->key), value(f_node->value)
+    {
+        left = nullptr;
+        right = nullptr;
+        memcpy(file_pos, f_node->pos, f_node->pos_len);
+    }
 };
 
 class file_handler
 {
 public:
-    int fd;
-    void* mapping_pos;
-    struct stat fd_stat;
-    int root_pos_len;
+    
     file_node* root;
-    long mapping_size;
-    long initial_file_size;
-
+    mem_node* mem_root;
+    unsigned char num_nodes = 0;
+    fstream input_file;
     file_handler(){
-        fd = open(file_name, O_RDWR);
-        if (fd < 0)
-        {
-            perror("open");
-            exit(0);
-        }
-        //get file status to get its size
-        fstat(fd, &fd_stat);
+        fstream i_file("redis");
+        input_file = move(i_file);
 
-        mapping_pos = mmap(NULL,fd_stat.st_size, PROT_READ | PROT_WRITE, MAP_SHARED,fd, 0 );
-        if(mapping_pos == MAP_FAILED){
-            perror("mmap");
-            exit(0);
-        }
-        //get the mapping size
-        mapping_size = fd_stat.st_size;
-        initial_file_size = fd_stat.st_size;
-        //now we have the file mapped at memory
         load_root();
     }
-    void create_file(){
-        int f_fd = open(file_name, O_RDWR);
-        if (f_fd < 0)
-        {
-            perror("open at create file");
-            exit(0);
-        }
-        //write fist 10 bytes as "0"
-        for (size_t i = 0; i < 10; i++)
-        {
-            write(f_fd, "0", 1);
-        }
-        char c = '\0';
-        lseek(fd, 4096, SEEK_END);
-        write(fd, &c, 1);
-    }
+    
     void load_root(){
-        //first 10 bytes hold the position of root node inside the file /*FIRST 10 BYTES IN THE MAPPING*/
-        char s_pos[MAX_POS];
-        long i_pos;
-        memcpy(s_pos, mapping_pos, MAX_POS);
-        i_pos = stoi(s_pos);
-        if(i_pos == 0){
+        //get first byte to see the number of nodes
+        num_nodes = input_file.get();
+        if (num_nodes == 0)
+        {
             root = nullptr;
+            mem_root = nullptr;
         }else{
-            root = (file_node*)(mapping_pos + i_pos);
-        }
+
+            //get the next byte to see the number of characters used to write root address
+            char num_node_off = input_file.get();
+            char buf[num_node_off+1];
+            input_file.read(buf, num_node_off);//now we have got the node offset as text in buf
+            buf[num_node_off] = '\0';
+            root = new file_node;
+            read_node(buf, root);
+            //now populate mem_root
+            mem_root = new mem_node(root);
+            delete root;
+        }   
     }
-    void print_nodes(file_node* cur){
-        if (root == nullptr)
-        {
-            cout<<"No nodes to print"<<endl;
-            return;
-        }
-        if(cur == nullptr){
-            return;
-        }
-        if(stoi(cur->left) != 0){
-            //there is a left node
-            file_node* left_node = (file_node*)(mapping_pos + stoi(cur->left));
-            print_nodes(left_node);
-        }
-        cout<<cur->key<<endl;
-        if(stoi(cur->right) != 0){
-            file_node* right_node = (file_node*) (mapping_pos + stoi(cur->right));
-            print_nodes(right_node);
-        }
+    void read_node(char* pos, file_node* node){
+
+        input_file.seekg(stoi(pos));//seek to the node offset
+        //now first read the length of node key
+        node->key_len = input_file.get();
+        //then read the next key_len bytes into node->key
+        input_file.read(node->key, node->key_len);
+        //now read the length of node val
+        node->val_len = input_file.get();
+        //then read the next key_len bytes into node->key
+        input_file.read(node->value, node->val_len);
+        //now read the length of node left
+        node->left_len = input_file.get();
+        //then read the next key_len bytes into node->key
+        input_file.read(node->left, node->val_len);
+        //now read the length of node right
+        node->right_len = input_file.get();
+        //then read the next key_len bytes into node->key
+        input_file.read(node->right, node->val_len);
+        //now read the length of node pos
+        node->pos_len = input_file.get();
+        //then read the next key_len bytes into node->key
+        input_file.read(node->pos, node->val_len);
     }
-    bool find(const char key[], file_node* cur, int len){
-        if (cur == nullptr)
+
+    mem_node* find(string& key, mem_node* cur){
+        if (key.compare(cur->key) < 0)
         {
-            return false;
-        }
-        if(strncmp(key, cur->key, len) < 0){
-            //key is less than cur->key
-            file_node* left_node = stoi(cur->left) != 0? (file_node*)(mapping_pos + stoi(cur->left)) : nullptr;
-            return find(key, left_node, len);
-        }else if (strncmp(key, cur->key, len) > 0)
+            //key < cur->key
+            //check first if cur has a left or not
+            if (cur->left == nullptr)
+            {
+                //check if there is a node on disk or not
+                file_node* tmp = new file_node;//represents the cur file_node on disk
+                read_node(cur->file_pos, tmp);
+                if(tmp->left_len == 0){
+                    delete tmp;
+                    return cur;
+                }
+                //now it has a left -> load it from disk and put in into memory
+                read_node(tmp->left, tmp);
+                cur->left = new mem_node(tmp);
+                delete tmp;
+            }
+            //it has a left
+            return find(key, cur->left);
+        }else if (key.compare(cur->key) > 0)
         {
-            /* key > cur->key */
-            file_node* right_node = stoi(cur->right) != 0? (file_node*)(mapping_pos + stoi(cur->right)) : nullptr;
-            return find(key, right_node, len);
-        }else if (strncmp(key, cur->key, len) == 0)
-        {
-            return true;
+            //key > cur->key
+            if (cur->right == nullptr)
+            {
+                //check if there is a node on disk or not
+                file_node* tmp = new file_node;//represents the cur file_node on disk
+                read_node(cur->file_pos, tmp);
+                if(tmp->right_len == 0){
+                    delete tmp;
+                    return cur;
+                }
+                //now it has a left -> load it from disk and put in into memory
+                read_node(tmp->right, tmp);
+                cur->right = new mem_node(tmp);
+                delete tmp;
+            }
+            //it has a left
+            return find(key, cur->right);
+        }else{
+            //key == cur->key
+            return cur;
         }
         //unexpected case
-        return false;
+        cout<<"Error in find UNEXPECTED CASE"<<endl;
+        exit(0);
     }
-    bool find_key(char key[], file_node* cur){
-        //append necessary characters to key to match stored key format
-        string k(key);
-        int len = k.size();
-        if (len < MAX_KEY)
+    mem_node* find_key(string& key){
+        if (num_nodes == 0)
         {
-            for(int i = 0; i < (MAX_KEY - len); i++){
-                k += "0";
-            }
+            cout<<"Empty tree"<<endl;
+            return nullptr;
         }
-        return find(k.c_str(), cur, len);
+        return find(key, mem_root);
     }
-    void write_node(long offset, signed char key_len, signed char val_len, signed char left_len, signed char right_len, signed char pos_len, string key, string value, string left, string right, string pos){
-        void* write_offset_key_len = (void*)(mapping_pos + offset);//here key_len
+    void extend_file_from_pos(const char* pos, size_t amount_to_extend){
+        input_file.seekp(amount_to_extend, ios::end);
+        string tmp("");
+        //make file wider by amount_to_extend bytes
+        for(char i = 0; i < amount_to_extend; i++)
+            input_file.put(0);
+        
+        
+    }
+    void write_node(file_node* f_cihld){
+        input_file.put(f_cihld->key_len);
+        input_file.write(f_cihld->key, f_cihld->key_len);
+
+        input_file.put(f_cihld->val_len);
+        input_file.write(f_cihld->value, f_cihld->val_len);
+
+        input_file.put(f_cihld->left_len);
+        input_file.write(f_cihld->left, f_cihld->left_len);
+
+        input_file.put(f_cihld->right_len);
+        input_file.write(f_cihld->right, f_cihld->right_len);
+
+        input_file.put(f_cihld->pos_len);
+        input_file.write(f_cihld->pos, f_cihld->pos_len);
+        
+        input_file.flush();//to synchronize writing
+    }
+    string write_file_node_as_left(string& file_pos,file_node* f_child){
+        //seek to the end of the file
+        input_file.seekp(0, ios::end);
+
+        long cur_offset = input_file.tellp();//the new_offset that the new node will be written at
+        write_node(f_child);//now the new child is on disk
+
+        return to_string(cur_offset);
+        //assign the new node to be a left node for file_node* cur
+
+        //assign the new node to be a left node for file_node* mem
+    }
+    void write_file_node_as_right(string& file_pos,file_node* f_child){
+
+    }
+    void insert_left(string& key, string& value,mem_node* mem_par){
+
+        file_node* f_child = new file_node;
+        f_child->key_len = key.size();
+        memcpy(f_child->key, key.c_str(), key.size());
+        f_child->val_len = value.size();
+        memcpy(f_child->value , value.c_str(), value.size());
+        f_child->left_len = 0;
+        memcpy(f_child->left, "", 0);
+        f_child->right_len = 0;
+        memcpy(f_child->right, "", 0);
+        f_child->pos_len = 0;
+        memcpy(f_child->pos, "", 0);
+
+        string tmp(mem_par->file_pos);
+        string left_pos = write_file_node_as_left(tmp , f_child);
+        mem_node* new_left = new mem_node(f_child);
+        //assign new_left to be left in memory
+        mem_par->left = new_left;
+        //assign f_child to be left on disk
+        extend_file_from_pos(mem_par->file_pos, left_pos.size());
+        delete f_child;
+    }
+    void insert_right(string& key, string& value,mem_node* cur){
+
+    }    
+    void insert(string& key,string& value ,mem_node* cur){
+        if (cur->key.compare(key) < 0)
+        {
+            /* cur->key < key */
+            insert_left(key, value, cur);
+        }else{
+            //cur->key > key
+            insert_right(key, value, cur);
+        }
+        
+    }
+
+    void insert_key(string& key, string& value){
+        if(key.size() > MAX_KEY){
+            cout<<"Key Lenght > MAX_KEY"<<endl;
+            return;
+        }
+        if(value.size() > MAX_VAL){
+            cout<<"Value Lenght > MAX_VAL"<<endl;
+            return;
+        }
+        mem_node* last_search = find_key(key);
+        if (last_search->key.compare(key) == 0)
+        {
+            cout<<"Already Exsiting key"<<endl;
+            return;
+        }
+        insert(key, value, mem_root);
+    }
+    /*void write_node(long offset, signed char key_len, signed char val_len, signed char left_len, signed char right_len, signed char pos_len, string key, string value, string left, string right, string pos){
+        void* num_nodes_offset = (void*)(mapping_pos + offset);
+        void* write_offset_key_len = (void*)(mapping_pos + offset + 1);//here key_len
         void* write_offset_key = (void*)(write_offset_key_len + 1);
         
         void* write_offset_val_len = (void*)(write_offset_key + KEY_LEN);  //here val_len
@@ -164,6 +277,7 @@ public:
         void* write_offset_pos_len = (void*) (write_offset_right + POS_LEN);
         void* write_offset_pos = (void*)(write_offset_pos_len + 1);
         
+        memcpy(num_nodes_offset, &num_nodes, 1);
         memcpy(write_offset_key_len, &key_len, 1);
         memcpy(write_offset_key, key.c_str(), KEY_LEN);
         
@@ -178,95 +292,16 @@ public:
         
         memcpy(write_offset_pos_len, &pos_len, 1);
         memcpy(write_offset_pos , pos.c_str(), POS_LEN);
-    }
-    long get_next_empty_pos_for_root(){
-        //TODO: limit the file size to 10 digits as max
-        //resize the mapping
-        /*file_node dummy_node;
-        int old_pos = mapping_size;
-        void* new_pos = mremap(mapping_pos, mapping_size, mapping_size+sizeof(dummy_node), MREMAP_MAYMOVE);
-        mapping_pos = new_pos;
-        mapping_size += sizeof(dummy_node);
-        return old_pos;*/
-        return 11;
-    }
-    void insert_util(char key[], char value[], file_node* cur){
-    }
-    void insert(char key[], char value[]){
-        if (find_key(key, root) == true)
-        {
-            cout<<"Already Existing key"<<endl;
-            return;
-        }
-        if (root == nullptr)
-        {
-            cout<<"in insert root = nullptr"<<endl;
-            //empty file -> create the root node
-            long new_pos = get_next_empty_pos_for_root();
-            string k(key);
-            string v(value);
-            string left;
-            string right;
-            //set new_pos to a suitable format for storage
-            char dummy[MAX_POS];
-            string pos = to_string(new_pos);
-            int pos_len = pos.size();
-            if(pos_len < MAX_POS){
-                for(int i = 0; i < MAX_POS-pos_len ;i++ ){
-                    pos += "0";
-                }
-            }
-            pos += '\0';
-            //set the key and value to suitable formats for storage
-            int k_len = k.size();
-            if (k_len < MAX_KEY)
-            {
-                for(int i = 0; i < (MAX_KEY - k_len); i++){
-                    k += "0";
-                }
-            }
-            k += '\0';
-
-            int v_len = v.size();
-            if (v_len < MAX_VAL)
-            {
-                for (size_t i = 0; i < (MAX_VAL - v_len); i++)
-                {
-                    v += "0";
-                }
-            }
-            v += '\0';
-            //set left and right = 0
-            for(int i = 0; i < MAX_POS; i++){
-                left += "0";
-                right += "0";
-            }
-            left += '\0';
-            right += '\0';
-            signed char root_pos_l = 1;
-            write_node(new_pos, k_len, v_len, 0,0,0,k, v, left, right, pos);
-            //update the root position
-            memcpy(mapping_pos+1, pos.c_str(), 10);
-            memcpy(mapping_pos, &root_pos_l, 1);
-
-            cout<<"after write_node"<<endl;
-            root = (file_node*)(mapping_pos + new_pos);
-            cout<<"root is "<<root->key<<" : "<<root->value<<endl;
-            cout<<"key len: "<<strlen(root->key)<<endl;
-            cout<<"val len: "<<strlen(root->value)<<endl;
-            return;
-        }
-        cout<<"in insert before insert_util"<<endl;
-        insert_util(key, value, root);
-    }
-    void write_all(char* to_write, int size){
+    }*/
+   
+    /*void write_all(char* to_write, int size){
         int written_so_far = 0;
         int num_written;
         while((num_written = write(fd, to_write+written_so_far, size - written_so_far)) > 0 && (size - written_so_far) > 0){
             written_so_far += num_written;
         }
-    }
-    ~file_handler(){
+    }*/
+    /*~file_handler(){
         fstat(fd, &fd_stat);
         //write mapped file into data file
         write_all((char*)mapping_pos, mapping_size);
@@ -274,16 +309,10 @@ public:
         fsync(fd);//wait until data is written to desk
         munmap(mapping_pos, fd_stat.st_size);
         close(fd);
-    }
+    }*/
 };
 
 int main(int argc, char const *argv[])
 {
-    file_handler fo;
-    if (fo.root == nullptr)
-    {
-        cout<<"root is nullptr"<<endl;
-    }
-    fo.insert("key1", "value1");
     return 0;
 }
