@@ -170,7 +170,7 @@ public:
         for(char i = 0; i < amount_to_extend; i++)
             input_file.put(0);
         
-        
+
     }
     void write_node(file_node* f_cihld){
         input_file.put(f_cihld->key_len);
@@ -258,7 +258,7 @@ public:
             cout<<"Already Exsiting key"<<endl;
             return;
         }
-        insert(key, value, mem_root);
+        insert(key, value, last_search);
     }
     /*void write_node(long offset, signed char key_len, signed char val_len, signed char left_len, signed char right_len, signed char pos_len, string key, string value, string left, string right, string pos){
         void* num_nodes_offset = (void*)(mapping_pos + offset);
