@@ -164,13 +164,23 @@ public:
         return find(key, mem_root);
     }
     void extend_file_from_pos(const char* pos, size_t amount_to_extend){
-        input_file.seekp(amount_to_extend, ios::end);
-        string tmp("");
-        //make file wider by amount_to_extend bytes
-        for(char i = 0; i < amount_to_extend; i++)
-            input_file.put(0);
-        
+        string tmp;
+        //we need to get the data from pos to eof in memory then make room then write them again
+        long from_offset = stoi(pos);
+        long to_offset = from_offset + amount_to_extend;
 
+        //seek to pos
+        input_file.seekg(from_offset, ios::beg);
+        //then read from here until the eof and store it in a string
+        while (input_file >> tmp);//now tmp contains all data after pos
+        //write 0's as dummy data to preserve space
+        input_file.seekp(from_offset, ios::beg);
+        for(int i = 0; i < amount_to_extend; i++)
+            input_file.put('0');
+        //then write the tmp data starting from pos offset+amount_to_extend
+        input_file.seekp(to_offset, ios::beg);
+        while (input_file << tmp);
+        
     }
     void write_node(file_node* f_cihld){
         input_file.put(f_cihld->key_len);
@@ -198,15 +208,17 @@ public:
         write_node(f_child);//now the new child is on disk
 
         return to_string(cur_offset);
-        //assign the new node to be a left node for file_node* cur
-
-        //assign the new node to be a left node for file_node* mem
     }
-    void write_file_node_as_right(string& file_pos,file_node* f_child){
+    string write_file_node_as_right(string& file_pos,file_node* f_child){
+        //seek to the end of the file
+        input_file.seekp(0, ios::end);
 
+        long cur_offset = input_file.tellp();//the new_offset that the new node will be written at
+        write_node(f_child);//now the new child is on disk
+
+        return to_string(cur_offset);
     }
-    void insert_left(string& key, string& value,mem_node* mem_par){
-
+    file_node* create_new_file_node(string& key, string& value){
         file_node* f_child = new file_node;
         f_child->key_len = key.size();
         memcpy(f_child->key, key.c_str(), key.size());
@@ -219,17 +231,50 @@ public:
         f_child->pos_len = 0;
         memcpy(f_child->pos, "", 0);
 
+        return f_child;
+    }
+    void insert_left(string& key, string& value,mem_node* mem_par){
+
+        file_node* f_child = create_new_file_node(key, value);
+
         string tmp(mem_par->file_pos);
         string left_pos = write_file_node_as_left(tmp , f_child);
         mem_node* new_left = new mem_node(f_child);
         //assign new_left to be left in memory
         mem_par->left = new_left;
         //assign f_child to be left on disk
-        extend_file_from_pos(mem_par->file_pos, left_pos.size());
+        long left_ptr_pos_on_disk = stoi(mem_par->file_pos) + mem_par->key.size() + mem_par->value.size() + 2;
+        extend_file_from_pos(to_string(left_ptr_pos_on_disk).c_str(), left_pos.size() + 1);
+
+        input_file.seekp(left_ptr_pos_on_disk, ios::beg);
+        //write the byte containing the left pos size
+        input_file.put(left_pos.size());
+        input_file.write(left_pos.c_str(), left_pos.size());
+        //no longer need the child file node in memory->delete it
         delete f_child;
     }
-    void insert_right(string& key, string& value,mem_node* cur){
+    void insert_right(string& key, string& value,mem_node* mem_par){
+        file_node* f_child = create_new_file_node(key, value);
+        string tmp(mem_par->file_pos);
+        string right_pos = write_file_node_as_right(tmp, f_child);
 
+        mem_node* new_right = new mem_node(f_child);
+        mem_par->right = new_right;
+
+        //get the position on disk where we will write the right_node position
+        long left_ptr_pos_on_disk = stoi(mem_par->file_pos) + mem_par->key.size() + mem_par->value.size() + 2;
+        char left_ptr_size_on_disk;
+        input_file.seekg(left_ptr_pos_on_disk, ios::beg);
+        left_ptr_size_on_disk = input_file.get();
+        long right_ptr_pos_on_disk = stoi(mem_par->file_pos) + mem_par->key.size() + mem_par->value.size() + left_ptr_size_on_disk + 3;
+
+        extend_file_from_pos(to_string(right_ptr_pos_on_disk).c_str(), right_pos.size() + 1);
+
+        input_file.seekp(right_ptr_pos_on_disk, ios::beg);
+        input_file.put(right_pos.size());
+        input_file.write(right_pos.c_str(), right_pos.size());
+
+        delete f_child;
     }    
     void insert(string& key,string& value ,mem_node* cur){
         if (cur->key.compare(key) < 0)
@@ -260,47 +305,6 @@ public:
         }
         insert(key, value, last_search);
     }
-    /*void write_node(long offset, signed char key_len, signed char val_len, signed char left_len, signed char right_len, signed char pos_len, string key, string value, string left, string right, string pos){
-        void* num_nodes_offset = (void*)(mapping_pos + offset);
-        void* write_offset_key_len = (void*)(mapping_pos + offset + 1);//here key_len
-        void* write_offset_key = (void*)(write_offset_key_len + 1);
-        
-        void* write_offset_val_len = (void*)(write_offset_key + KEY_LEN);  //here val_len
-        void* write_offset_val = (void*)(write_offset_val_len + 1);
-        
-        void* write_offset_left_len = (write_offset_val + VAL_len);//here left len
-        void* write_offset_left = (void*)(write_offset_left_len + 1);
-
-        void* write_offset_right_len = (write_offset_left + POS_LEN);
-        void* write_offset_right = (void*)(write_offset_right_len + 1);
-        
-        void* write_offset_pos_len = (void*) (write_offset_right + POS_LEN);
-        void* write_offset_pos = (void*)(write_offset_pos_len + 1);
-        
-        memcpy(num_nodes_offset, &num_nodes, 1);
-        memcpy(write_offset_key_len, &key_len, 1);
-        memcpy(write_offset_key, key.c_str(), KEY_LEN);
-        
-        memcpy(write_offset_val_len, &val_len, 1);
-        memcpy(write_offset_val , value.c_str(), VAL_len);
-        
-        memcpy(write_offset_left_len, &left_len, 1);
-        memcpy(write_offset_left , left.c_str(), POS_LEN);
-        
-        memcpy(write_offset_right_len, &right_len, 1);
-        memcpy(write_offset_right , right.c_str(), POS_LEN);
-        
-        memcpy(write_offset_pos_len, &pos_len, 1);
-        memcpy(write_offset_pos , pos.c_str(), POS_LEN);
-    }*/
-   
-    /*void write_all(char* to_write, int size){
-        int written_so_far = 0;
-        int num_written;
-        while((num_written = write(fd, to_write+written_so_far, size - written_so_far)) > 0 && (size - written_so_far) > 0){
-            written_so_far += num_written;
-        }
-    }*/
     /*~file_handler(){
         fstat(fd, &fd_stat);
         //write mapped file into data file
