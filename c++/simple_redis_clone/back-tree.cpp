@@ -54,10 +54,11 @@ public:
     mem_node* mem_root;
     unsigned char num_nodes = 0;
     fstream input_file;
+    mem_node* rem_parent;
     file_handler(){
         fstream i_file("redis");
         input_file = move(i_file);
-
+        rem_parent = nullptr;
         load_root();
     }
     
@@ -82,7 +83,7 @@ public:
             delete root;
         }   
     }
-    void read_node(char* pos, file_node* node){
+    void read_node(const char* pos, file_node* node){
 
         input_file.seekg(stoi(pos));//seek to the node offset
         //now first read the length of node key
@@ -112,6 +113,7 @@ public:
         {
             //key < cur->key
             //check first if cur has a left or not
+            rem_parent = cur;
             if (cur->left == nullptr)
             {
                 //check if there is a node on disk or not
@@ -122,14 +124,16 @@ public:
                     return cur;
                 }
                 //now it has a left -> load it from disk and put in into memory
-                read_node(tmp->left, tmp);
-                cur->left = new mem_node(tmp);
-                delete tmp;
+
+                read_node(tmp->left, tmp);//now tmp contains on-disk node of left
+                cur->left = new mem_node(tmp);//put on-disk left in mmeory
+                delete tmp;//no longer needs the in-disk node of left or cur
             }
             //it has a left
             return find(key, cur->left);
         }else if (key.compare(cur->key) > 0)
         {
+            rem_parent = cur;
             //key > cur->key
             if (cur->right == nullptr)
             {
@@ -155,6 +159,7 @@ public:
         cout<<"Error in find UNEXPECTED CASE"<<endl;
         exit(0);
     }
+    //TODO: detect whether a left or right node is deleted
     mem_node* find_key(string& key){
         if (num_nodes == 0)
         {
@@ -287,7 +292,14 @@ public:
         }
         
     }
-
+    void increment_num_nodes(){
+        input_file.seekg(0,ios::beg);
+        num_nodes = input_file.get();
+        num_nodes++;
+        input_file.seekp(0, ios::beg);
+        input_file.put(num_nodes);
+    }
+    //TODO: keep track of deleted nodes and their sizes to overwrite them with new nodes
     void insert_key(string& key, string& value){
         if(key.size() > MAX_KEY){
             cout<<"Key Lenght > MAX_KEY"<<endl;
@@ -304,6 +316,123 @@ public:
             return;
         }
         insert(key, value, last_search);
+        increment_num_nodes();
+    }
+    void shrink_file_node_pos(const char* pos, long amount_to_shrink){
+
+    }
+    void remove(string& key, mem_node* to_delete, mem_node* mem_par){
+        //check no on-disk left and right
+        file_node* tmp = new file_node;
+        read_node(to_delete->file_pos, tmp);//reads the on-disk node into tmp
+        //case 1: it has no left or right (LEAF NODE)
+        if (tmp->left_len == 0 && tmp->right_len == 0)
+        {//set mem_par child to nullptr
+            /* ACTUALLY A LEAF NODE */
+            //shrink the node space
+            long shrink_pos = stoi(to_delete->file_pos);
+            long shrink_size = sizeof(*tmp);
+            shrink_file_node_pos(to_delete->file_pos, shrink_size);
+
+            //make parent->left or parent->right = 0 in file and = nullptr in memory
+                
+            //making parent left or right on disk = 0
+            read_node(mem_par->file_pos, tmp);//now tmp holds the in-disk node of the parent
+            shrink_size = string(to_delete->file_pos).size();//keep 1 byte for holding 0 as left_len or right_len
+            shrink_pos = stoi(mem_par->file_pos);
+
+            //making memory parent->to_delete child as nullptr
+            if(mem_par->key.compare(to_delete->key) < 0){
+                //to_delete is right_child
+                shrink_pos += mem_par->key.size() + mem_par->value.size() + 2;//+2 for the 2 bytes holding the key_len and val_len in file
+                shrink_file_node_pos(to_string(shrink_pos).c_str(), string(to_delete->file_pos).size());
+                mem_par->right = nullptr;
+            }else{
+                shrink_pos += mem_par->key.size() + mem_par->value.size() + tmp->left_len + 3;
+                shrink_file_node_pos(to_string(shrink_pos).c_str(), string(to_delete->file_pos).size());
+                mem_par->left = nullptr;
+            }
+            //write 0 as the left_len or right_len
+            input_file.seekp(shrink_pos, ios::beg);
+            input_file.put(0);
+            delete to_delete;//remove it from memory   
+            
+        }else if(tmp->left_len == 0){
+            //has only right child => shrink the in-file node and replace mem_par->right to be to_delete->right
+            long shrink_pos, shrink_size;
+            long new_right_pos = stoi(tmp->right);//holds the in-file position of the new_right
+            shrink_pos = stoi(to_delete->file_pos);//shrink the to_delete node in file
+            shrink_size = sizeof(*tmp);//holds the size of the in-file node to be deleted
+            shrink_file_node_pos(to_string(shrink_pos).c_str(), shrink_size);//now we have shrinked the in-file node
+            //then shrink the parent->right in file 
+            read_node(mem_par->file_pos, tmp);//tmp now contains in-file mem_par
+            shrink_pos = stoi(mem_par->file_pos) + mem_par->key.size() + mem_par->value.size() + tmp->left_len + 3;
+            shrink_size = tmp->right_len;
+            shrink_file_node_pos(to_string(shrink_pos).c_str(), shrink_size);
+            //make the new_right as the right of the parent
+            if (to_delete->right == nullptr)
+            {
+                //load the new_right from file
+                file_node* new_right = new file_node;
+                read_node(to_string(new_right_pos).c_str(), new_right);
+                mem_node* mem_new_right = new mem_node(new_right);
+                to_delete->right = mem_new_right;
+            }
+            mem_par->right = to_delete->right;
+            //write the new_right in-file node to be in-file parent->right
+            long extend_pos, extend_size;
+            extend_pos = stoi(mem_par->file_pos) + mem_par->key.size() + mem_par->value.size() + tmp->left_len + 4;
+            extend_size = string(mem_par->right->file_pos).size();
+            extend_file_from_pos(to_string(extend_pos).c_str(), extend_size);
+            //put the new right pos in right position in file
+            input_file.seekp(extend_pos-1, ios::end);
+            input_file.put(extend_size);
+            input_file.write(mem_par->right->file_pos, extend_size);
+            delete to_delete;
+        }else{
+            //has only left child => shrink the in-file node and replace mem_par->left to be to_delete->left
+            long shrink_pos, shrink_size;
+            long new_left_pos = stoi(tmp->left);//holds the in-file position of the new_right
+            shrink_pos = stoi(to_delete->file_pos);//shrink the to_delete node in file
+            shrink_size = sizeof(*tmp);//holds the size of the in-file node to be deleted
+            shrink_file_node_pos(to_string(shrink_pos).c_str(), shrink_size);//now we have shrinked the in-file node
+            //then shrink the parent->right in file 
+            read_node(mem_par->file_pos, tmp);//tmp now contains in-file mem_par
+            shrink_pos = stoi(mem_par->file_pos) + mem_par->key.size() + mem_par->value.size() + 3;
+            shrink_size = tmp->left_len;
+            shrink_file_node_pos(to_string(shrink_pos).c_str(), shrink_size);
+            //make the new_right as the right of the parent
+            if (to_delete->left == nullptr)
+            {
+                //load the new_right from file
+                file_node* new_left = new file_node;
+                read_node(to_string(new_left_pos).c_str(), new_left);
+                mem_node* mem_new_left = new mem_node(new_left);
+                to_delete->left = mem_new_left;
+            }
+            mem_par->left = to_delete->left;
+            //write the new_right in-file node to be in-file parent->right
+            long extend_pos, extend_size;
+            extend_pos = stoi(mem_par->file_pos) + mem_par->key.size() + mem_par->value.size() + tmp->left_len + 3;
+            extend_size = string(mem_par->left->file_pos).size();
+            extend_file_from_pos(to_string(extend_pos).c_str(), extend_size);
+            //put the new right pos in right position in file
+            input_file.seekp(extend_pos-1, ios::end);
+            input_file.put(extend_size);
+            input_file.write(mem_par->left->file_pos, extend_size);
+            delete to_delete;
+
+        }
+    }
+    
+    void remove_key(string& key){
+        mem_node* last_search = find_key(key);
+        if(key.compare(last_search->key) == 0){
+            remove(key, last_search, rem_parent);
+            rem_parent = nullptr;//make it null again for subsequent remove operations
+        }else{
+            cout<<"Non Existing key"<<endl;
+        }
     }
     /*~file_handler(){
         fstat(fd, &fd_stat);
