@@ -38,7 +38,7 @@ public:
     mem_node* right;
     char file_pos[MAX_POS];
 
-    mem_node(file_node* f_node): key(f_node->key), value(f_node->value)
+    mem_node(file_node* f_node): key(string(f_node->key)), value(string(f_node->value))
     {
         left = nullptr;
         right = nullptr;
@@ -75,9 +75,13 @@ public:
             root = nullptr;
             mem_root = nullptr;
         }else{
-
+            //the next byte is the key_len of root key
+            root = new file_node;
+            read_node("1", root);
+            mem_root = new mem_node(root);
+            delete root;
             //get the next byte to see the number of characters used to write root address
-            char num_node_off = input_file.get();
+            /*char num_node_off = input_file.get();
             cout<<"num_nodes_off = "<<num_node_off<<endl;
             char buf[num_node_off+1];
             input_file.read(buf, num_node_off);//now we have got the node offset as text in buf
@@ -86,7 +90,7 @@ public:
             read_node(buf, root);
             //now populate mem_root
             mem_root = new mem_node(root);
-            delete root;
+            delete root;*/
         }   
     }
     void read_node(const char* pos, file_node* node){
@@ -104,15 +108,15 @@ public:
         //now read the length of node left
         node->left_len = input_file.get();
         //then read the next key_len bytes into node->key
-        input_file.read(node->left, node->val_len);
+        input_file.read(node->left, node->left_len);
         //now read the length of node right
         node->right_len = input_file.get();
         //then read the next key_len bytes into node->key
-        input_file.read(node->right, node->val_len);
+        input_file.read(node->right, node->right_len);
         //now read the length of node pos
         node->pos_len = input_file.get();
         //then read the next key_len bytes into node->key
-        input_file.read(node->pos, node->val_len);
+        input_file.read(node->pos, node->pos_len);
     }
 
     mem_node* find(string& key, mem_node* cur){
@@ -123,10 +127,11 @@ public:
             mem_parent = cur;
             if (cur->left == nullptr)
             {
+                cout<<cur->key<<"->left = nullptr"<<endl;
                 //check if there is a node on disk or not
                 file_node* tmp = new file_node;//represents the cur file_node on disk
                 read_node(cur->file_pos, tmp);
-                if(tmp->left_len == 0){
+                if(tmp->left_len == 1){
                     delete tmp;
                     return cur;
                 }
@@ -144,10 +149,13 @@ public:
             //key > cur->key
             if (cur->right == nullptr)
             {
+                cout<<cur->key<<"->right = nullptr"<<endl;
+
                 //check if there is a node on disk or not
                 file_node* tmp = new file_node;//represents the cur file_node on disk
+                cout<<cur->key<<"->file_pos = "<<cur->file_pos<<endl;
                 read_node(cur->file_pos, tmp);
-                if(tmp->right_len == 0){
+                if(tmp->right_len == 1){
                     delete tmp;
                     return cur;
                 }
@@ -173,6 +181,7 @@ public:
             cout<<"Empty tree"<<endl;
             return nullptr;
         }
+        cout<<"entering find "<<key<<" from find_key"<<endl;
         return find(key, mem_root);
     }
     void extend_file_from_pos(const char* pos, size_t amount_to_extend){
@@ -217,6 +226,8 @@ public:
         input_file.seekp(0, ios::end);
 
         long cur_offset = input_file.tellp();//the new_offset that the new node will be written at
+        f_child->pos_len = to_string(cur_offset).size();
+        memcpy(f_child->pos, to_string(cur_offset).c_str(), to_string(cur_offset).size());
         write_node(f_child);//now the new child is on disk
 
         return to_string(cur_offset);
@@ -226,6 +237,8 @@ public:
         input_file.seekp(0, ios::end);
 
         long cur_offset = input_file.tellp();//the new_offset that the new node will be written at
+        f_child->pos_len = to_string(cur_offset).size();
+        memcpy(f_child->pos, to_string(cur_offset).c_str(), to_string(cur_offset).size());
         write_node(f_child);//now the new child is on disk
 
         return to_string(cur_offset);
@@ -236,12 +249,12 @@ public:
         memcpy(f_child->key, key.c_str(), key.size());
         f_child->val_len = value.size();
         memcpy(f_child->value , value.c_str(), value.size());
-        f_child->left_len = 0;
-        memcpy(f_child->left, "", 0);
-        f_child->right_len = 0;
-        memcpy(f_child->right, "", 0);
-        f_child->pos_len = 0;
-        memcpy(f_child->pos, "", 0);
+        f_child->left_len = 1;
+        memcpy(f_child->left, "0", 1);
+        f_child->right_len = 1;
+        memcpy(f_child->right, "0", 1);
+        f_child->pos_len = 1;
+        memcpy(f_child->pos, "0", 1);
 
         return f_child;
     }
@@ -329,7 +342,9 @@ public:
             cout<<"Value Lenght > MAX_VAL"<<endl;
             return;
         }
+        cout<<"before getting last search for "<<key<<endl;
         mem_node* last_search = find_key(key);
+        cout<<"after getting last search for "<<key<<endl;
         if (last_search != nullptr && last_search->key.compare(key) == 0)
         {
             cout<<"Already Exsiting key"<<endl;
@@ -340,6 +355,8 @@ public:
             cout<<"in inset_key mem_root"<<endl;
             //insert node as root
             file_node* f_root = create_new_file_node(key, value);
+            f_root->pos_len = 1;
+            memcpy(f_root->pos, "1",1);
             input_file.seekp(1,ios::beg);//write at byte 1: always an address for root
             write_node(f_root);
             mem_root = new mem_node(f_root);
@@ -500,13 +517,15 @@ int main(int argc, char const *argv[])
         cout<<"mem root = nullptr"<<endl;
     }else{
         cout<<"mem root != nullptr"<<endl;
+        cout<<"mem_root = "<<fh.mem_root->key<<endl;
+        cout<<"mem_root->file_pos = "<<fh.mem_root->file_pos<<endl;
     }
-    string k = "key4";
-    string v = "value4";
-    cout<<"before insert"<<endl;
-    fh.insert_key(k, v);
-    cout<<"after insert"<<endl;
-    cout<<fh.find_key(k)->key<<endl;
-    cout<<fh.find_key(k)->value<<endl;
+    string k = "key5";
+    string v = "value5";
+    mem_node* s = fh.find_key(k);
+    if(s != nullptr){
+        cout<<s->key<<endl;
+        cout<<s->value<<endl;
+    }
     return 0;
 }
