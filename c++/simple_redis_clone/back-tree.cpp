@@ -54,16 +54,21 @@ public:
     mem_node* mem_root;
     unsigned char num_nodes = 0;
     fstream input_file;
-    mem_node* rem_parent;
+    mem_node* mem_parent;
     file_handler(){
+        cout<<"In constructor"<<endl;
         fstream i_file("redis");
         input_file = move(i_file);
-        rem_parent = nullptr;
+        cout<<"after move(i_file)"<<endl;
+        mem_parent = nullptr;
+        cout<<"before load_root"<<endl;
         load_root();
+        cout<<"after load_root"<<endl;
     }
     
     void load_root(){
         //get first byte to see the number of nodes
+        input_file.seekg(0,ios::beg);
         num_nodes = input_file.get();
         if (num_nodes == 0)
         {
@@ -73,6 +78,7 @@ public:
 
             //get the next byte to see the number of characters used to write root address
             char num_node_off = input_file.get();
+            cout<<"num_nodes_off = "<<num_node_off<<endl;
             char buf[num_node_off+1];
             input_file.read(buf, num_node_off);//now we have got the node offset as text in buf
             buf[num_node_off] = '\0';
@@ -84,8 +90,9 @@ public:
         }   
     }
     void read_node(const char* pos, file_node* node){
-
+        cout<<"Entering read_node"<<endl;
         input_file.seekg(stoi(pos));//seek to the node offset
+        cout<<"after input_file.seekg(stoi(pos))"<<endl;
         //now first read the length of node key
         node->key_len = input_file.get();
         //then read the next key_len bytes into node->key
@@ -113,7 +120,7 @@ public:
         {
             //key < cur->key
             //check first if cur has a left or not
-            rem_parent = cur;
+            mem_parent = cur;
             if (cur->left == nullptr)
             {
                 //check if there is a node on disk or not
@@ -133,7 +140,7 @@ public:
             return find(key, cur->left);
         }else if (key.compare(cur->key) > 0)
         {
-            rem_parent = cur;
+            mem_parent = cur;
             //key > cur->key
             if (cur->right == nullptr)
             {
@@ -239,7 +246,7 @@ public:
         return f_child;
     }
     void insert_left(string& key, string& value,mem_node* mem_par){
-
+        cout<<"inside insert_left of"<<mem_par->key<<endl;
         file_node* f_child = create_new_file_node(key, value);
 
         string tmp(mem_par->file_pos);
@@ -259,10 +266,12 @@ public:
         delete f_child;
     }
     void insert_right(string& key, string& value,mem_node* mem_par){
+        cout<<"inside insert_right of "<<mem_par->key<<endl;
         file_node* f_child = create_new_file_node(key, value);
         string tmp(mem_par->file_pos);
+        cout<<"before write_file_node_as_right"<<endl;
         string right_pos = write_file_node_as_right(tmp, f_child);
-
+        cout<<"after write_file_node_as_right"<<endl;
         mem_node* new_right = new mem_node(f_child);
         mem_par->right = new_right;
 
@@ -272,9 +281,9 @@ public:
         input_file.seekg(left_ptr_pos_on_disk, ios::beg);
         left_ptr_size_on_disk = input_file.get();
         long right_ptr_pos_on_disk = stoi(mem_par->file_pos) + mem_par->key.size() + mem_par->value.size() + left_ptr_size_on_disk + 3;
-
+        cout<<"before extend_file_from_pos"<<endl;
         extend_file_from_pos(to_string(right_ptr_pos_on_disk).c_str(), right_pos.size() + 1);
-
+        cout<<"after extend_file_from_pos"<<endl;
         input_file.seekp(right_ptr_pos_on_disk, ios::beg);
         input_file.put(right_pos.size());
         input_file.write(right_pos.c_str(), right_pos.size());
@@ -282,13 +291,16 @@ public:
         delete f_child;
     }    
     void insert(string& key,string& value ,mem_node* cur){
+        cout<<"in insert cur="<<cur->key<<" for key="<<key<<endl;
         if (cur->key.compare(key) < 0)
         {
             /* cur->key < key */
-            insert_left(key, value, cur);
+            cout<<"inserting into right of "<<cur->key<<endl;
+            insert_right(key, value, cur);
         }else{
             //cur->key > key
-            insert_right(key, value, cur);
+            cout<<"inserting into left of "<<cur->key<<endl;
+            insert_left(key, value, cur);
         }
         
     }
@@ -299,8 +311,16 @@ public:
         input_file.seekp(0, ios::beg);
         input_file.put(num_nodes);
     }
+    void decrement_num_nodes(){
+        input_file.seekg(0,ios::beg);
+        num_nodes = input_file.get();
+        num_nodes--;
+        input_file.seekp(0, ios::beg);
+        input_file.put(num_nodes);
+    }
     //TODO: keep track of deleted nodes and their sizes to overwrite them with new nodes
     void insert_key(string& key, string& value){
+        cout<<"in insert_key "<<key<<endl;
         if(key.size() > MAX_KEY){
             cout<<"Key Lenght > MAX_KEY"<<endl;
             return;
@@ -310,16 +330,38 @@ public:
             return;
         }
         mem_node* last_search = find_key(key);
-        if (last_search->key.compare(key) == 0)
+        if (last_search != nullptr && last_search->key.compare(key) == 0)
         {
             cout<<"Already Exsiting key"<<endl;
             return;
         }
+        //check if root == nullptr
+        if(mem_root == nullptr){
+            cout<<"in inset_key mem_root"<<endl;
+            //insert node as root
+            file_node* f_root = create_new_file_node(key, value);
+            input_file.seekp(1,ios::beg);//write at byte 1: always an address for root
+            write_node(f_root);
+            mem_root = new mem_node(f_root);
+            delete f_root;
+            increment_num_nodes();
+            return;
+        }
+        cout<<"getting into insert last_search="<<last_search->key<<endl;
         insert(key, value, last_search);
         increment_num_nodes();
     }
     void shrink_file_node_pos(const char* pos, long amount_to_shrink){
+        //first store data from pos+amount_to_shrink until eof
+        string tmp;
+        long store_offset = stoi(pos) + amount_to_shrink;
+        input_file.seekg(store_offset);
 
+        while(input_file >> tmp);//now tmp contains the data from store_offset until eof
+        //now write tmp data at pos
+        input_file.seekp(stoi(pos));
+        while(input_file<<tmp);
+        //now the file has been shrunk
     }
     void remove(string& key, mem_node* to_delete, mem_node* mem_par){
         //check no on-disk left and right
@@ -393,6 +435,7 @@ public:
             //has only left child => shrink the in-file node and replace mem_par->left to be to_delete->left
             long shrink_pos, shrink_size;
             long new_left_pos = stoi(tmp->left);//holds the in-file position of the new_right
+            
             shrink_pos = stoi(to_delete->file_pos);//shrink the to_delete node in file
             shrink_size = sizeof(*tmp);//holds the size of the in-file node to be deleted
             shrink_file_node_pos(to_string(shrink_pos).c_str(), shrink_size);//now we have shrinked the in-file node
@@ -428,24 +471,42 @@ public:
     void remove_key(string& key){
         mem_node* last_search = find_key(key);
         if(key.compare(last_search->key) == 0){
-            remove(key, last_search, rem_parent);
-            rem_parent = nullptr;//make it null again for subsequent remove operations
+            remove(key, last_search, mem_parent);
+            mem_parent = nullptr;//make it null again for subsequent remove operations
+            decrement_num_nodes();
+            if(num_nodes == 0)
+                prepare_file_no_nodes();
+        
         }else{
             cout<<"Non Existing key"<<endl;
         }
     }
-    /*~file_handler(){
-        fstat(fd, &fd_stat);
-        //write mapped file into data file
-        write_all((char*)mapping_pos, mapping_size);
-        //write(fd, mapping_pos, mapping_size);
-        fsync(fd);//wait until data is written to desk
-        munmap(mapping_pos, fd_stat.st_size);
-        close(fd);
-    }*/
+    void prepare_file_no_nodes(){
+        mem_root = nullptr;
+        //TODO: resize input_file
+    }
+    ~file_handler(){
+        input_file.flush();
+        input_file.close();
+    }
 };
 
 int main(int argc, char const *argv[])
 {
+    file_handler fh;
+    cout<<"after constructing fh"<<endl;
+    if (fh.mem_root == nullptr)
+    {
+        cout<<"mem root = nullptr"<<endl;
+    }else{
+        cout<<"mem root != nullptr"<<endl;
+    }
+    string k = "key4";
+    string v = "value4";
+    cout<<"before insert"<<endl;
+    fh.insert_key(k, v);
+    cout<<"after insert"<<endl;
+    cout<<fh.find_key(k)->key<<endl;
+    cout<<fh.find_key(k)->value<<endl;
     return 0;
 }
