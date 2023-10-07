@@ -311,6 +311,172 @@ public:
         }
         increment_num_nodes();
     }
+    void shrink_from_pos(int pos, int amount_to_shrink){
+        /*string tmp("");
+        input_file.seekg(pos + amount_to_shrink, ios::beg);
+        unsigned char c;
+        while ((c = input_file.get()) != input_file.eofbit)
+        {
+            tmp += c;
+        }
+        //now tmp string contains the data after pos+amount_to_shrink to keep it from being shrunk
+        input_file.seekp(pos, ios::beg);
+        int i = 0;
+        while (input_file.put(tmp[i]).good())
+        {
+            i++;
+        }*/
+        //resize the on-disk file using truncate or resize_file
+        //FOR NOW: just write this space from pos to pos+amount_to_shrink to be all 0's
+        input_file.seekp(pos, ios::beg);
+        for (int i = pos; i < pos+amount_to_shrink; i++)
+        {
+            input_file.put(0);
+        }
+        input_file.flush();
+    }
+    void nullify_right(file_node* node){
+        int val = 0;
+        int offset = node->pos + MAX_KEY + MAX_VAL + sizeof(int) + 2;
+        input_file.seekp(offset, ios::beg);
+        input_file.write((char*)&val, sizeof(int));
+    }
+    void nullify_left(file_node* node){
+        int val = 0;
+        int offset = node->pos + MAX_KEY + MAX_VAL + 2;
+        input_file.seekp(offset, ios::beg);
+        input_file.write((char*)&val, sizeof(int));
+    }
+    mem_node* get_successor_util(mem_node* cur){
+        file_node* tmp = new file_node;
+        while (true)
+        {
+            if (cur->left == nullptr)
+            {
+                //check if there is on-disl left node or not
+                read_node(cur->file_pos, tmp);
+                if (tmp->left == 0)
+                {
+                    break;//just return cur
+                }else{
+                    read_node(tmp->left, tmp);//now tmp contains on-disk node of the left
+                    mem_node* left = new mem_node(tmp);
+                    cur->left = left;
+                }
+            }
+            cur = cur->left;
+        }
+        delete tmp;
+        return cur;
+    }
+    mem_node* get_successor(mem_node* par){
+        mem_node* cur = par->right;
+        mem_node* tmp = get_successor_util(cur);
+        return tmp == nullptr? cur : tmp;
+    }
+    mem_node* get_predecessor_util(mem_node* cur){
+        file_node* tmp = new file_node;
+        while (true)
+        {
+            if(cur->right == nullptr){
+                read_node(cur->file_pos, tmp);//read the on-disk node of cur
+                if(tmp->right == 0){
+                    break;
+                }else{
+                    read_node(tmp->right, tmp);
+                    mem_node* right = new mem_node(tmp);
+                    cur->right = right;
+                }
+            }
+            cur = cur->right;
+        }
+        delete tmp;
+        return cur;
+    }
+    mem_node* get_predecessor(mem_node* par){
+        mem_node* cur = par->left;
+        mem_node* tmp = get_predecessor_util(cur);
+        return tmp == nullptr? cur: tmp;
+    }
+    void remove(mem_node* to_delete, mem_node* mem_par ){
+        file_node* child_file_node = new file_node;//represents the on-disk node of to_delete
+        file_node* parent_file_node = new file_node;//represents the on-disk node of to_delete
+        read_node(to_delete->file_pos, child_file_node);
+        read_node(mem_par->file_pos, parent_file_node);
+        shrink_from_pos(to_delete->file_pos, sizeof(*child_file_node));
+
+        if (child_file_node->left == 0 && child_file_node->right == 0)
+        {
+            //leaf node: just delete it and set its parent to have nullptr instead of it
+            //write in its parent nullptr in its pointer
+            if(mem_par->key.compare(to_delete->key) < 0){
+                //to_delete is its right
+                nullify_right(parent_file_node);
+                mem_par->right = nullptr;
+            }else{
+                //to_delete is its left
+                nullify_left(parent_file_node);
+                mem_par->left = nullptr;
+            }
+        }else{
+            if (child_file_node->left == 0)
+            {
+                //has right node: get its successor
+                mem_node* successor = get_successor(to_delete);
+                //set to_delete's parent->child = successor
+                if(mem_par->key.compare(to_delete->key) < 0){
+                    //to_delete is its right node
+                    mem_par->right = successor;
+                    //change parent_file_node on-disk right
+                    int parent_file_right_pos = mem_par->file_pos + MAX_KEY + MAX_VAL + sizeof(int) + 2; 
+                    input_file.seekp(parent_file_right_pos, ios::beg);
+                    input_file.write((char*) &(successor->file_pos), sizeof(int));
+                }else{
+                    //to_delete is its left
+                    mem_par->left = successor;
+                    int parent_file_left_pos = mem_par->file_pos + MAX_KEY + MAX_VAL + 2;
+                    input_file.seekp(parent_file_left_pos, ios::beg);
+                    input_file.write((char*) &(successor->file_pos), sizeof(int));
+                }
+            }else{
+                //get its predecessor
+                mem_node* predecessor = get_predecessor(to_delete);
+                if(mem_par->key.compare(to_delete->key) < 0){
+                    //to_delete is its right node
+                    mem_par->right = predecessor;
+                    //change parent_file_node on-disk right
+                    int parent_file_right_pos = mem_par->file_pos + MAX_KEY + MAX_VAL + sizeof(int) + 2; 
+                    input_file.seekp(parent_file_right_pos, ios::beg);
+                    input_file.write((char*) &(predecessor->file_pos), sizeof(int));
+                }else{
+                     //to_delete is its left
+                    mem_par->left = predecessor;
+                    int parent_file_left_pos = mem_par->file_pos + MAX_KEY + MAX_VAL + 2;
+                    input_file.seekp(parent_file_left_pos, ios::beg);
+                    input_file.write((char*) &(predecessor->file_pos), sizeof(int));
+                }
+            }
+            
+        }
+        delete to_delete;
+        delete child_file_node;
+        delete parent_file_node;
+    }
+    void remove_key(string& key){
+        if (num_nodes == 0)
+        {
+            cout<<"Empty DataBase"<<endl;
+            return;
+        }
+        mem_node* last_search = find_key(key);
+        if (last_search->key.compare(key) != 0)
+        {
+            cout<<"Not Existing Key"<<endl;
+            return;
+        }
+        remove(last_search, mem_parent);
+        decrement_num_nodes();
+    }
 
     ~file_handler(){
         input_file.seekp(0, ios::beg);
@@ -321,8 +487,6 @@ public:
 };
 
 int main(int argc, char const *argv[])
-{
-   
-    
+{  
     return 0;
 }
